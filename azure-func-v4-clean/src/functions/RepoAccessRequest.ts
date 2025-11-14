@@ -10,7 +10,6 @@ import { z } from "zod";
 
 // ----- Config (env variables) -----
 const GH_OWNER = process.env.GH_OWNER!;
-const GH_REPO = process.env.GH_REPO!;
 const GH_PERMISSION = process.env.GH_PERMISSION || "pull";
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN!; // local: in local.settings.json; Azure: via Key Vault reference
 const TABLE_CONN = process.env.TABLE_CONN!;
@@ -20,6 +19,7 @@ const TABLE_NAME = process.env.TABLE_NAME || "Entitlements";
 const ReqSchema = z.object({
   email: z.string().email(),
   github_username: z.string().min(1),
+  repository: z.string().min(1),
   permission: z
     .enum(["pull", "triage", "push", "maintain", "admin"])
     .optional(),
@@ -79,23 +79,34 @@ const octokit = new Octokit({
   userAgent: "repo-access-minimal/1.0",
 });
 
-async function inviteCollaborator(username: string, permission: string) {
+async function inviteCollaborator(
+  username: string,
+  permission: string,
+  repository: string,
+  context: InvocationContext
+) {
+  context.log(
+    `🚀 Inviting user @${username} to ${GH_OWNER}/${repository} with permission: ${permission}`
+  );
+
   const resp = await octokit.request(
     "PUT /repos/{owner}/{repo}/collaborators/{username}",
     {
       owner: GH_OWNER,
-      repo: GH_REPO,
+      repo: repository,
       username,
       permission,
     }
   );
+
+  context.log(`✅ GitHub API response status: ${resp.status}`);
   return resp.status; // 201/202/204
 }
 
-async function listInvitations() {
+async function listInvitations(repository: string) {
   const resp = await octokit.request("GET /repos/{owner}/{repo}/invitations", {
     owner: GH_OWNER,
-    repo: GH_REPO,
+    repo: repository,
   });
   return resp.data;
 }
@@ -115,11 +126,20 @@ export async function handler(
       };
     }
 
-    const { email, github_username } = parsed.data;
+    const { email, github_username, repository } = parsed.data;
     const permission = parsed.data.permission ?? GH_PERMISSION;
 
-    const partitionKey = GH_REPO; // single-repo MVP
-    const rowKey = github_username.trim();
+    ctx.log(`📥 Received request:`, {
+      email,
+      github_username,
+      repository,
+      permission,
+    });
+
+    const partitionKey: string = repository; // single-repo MVP
+    const rowKey: string = github_username.trim();
+
+    ctx.log(`🔑 Using repository: ${repository} (from request data)`);
 
     // Idempotency: already invited/active?
     const existing = await getEnt(partitionKey, rowKey);
@@ -146,11 +166,18 @@ export async function handler(
       source: "form",
     });
 
+    ctx.log(`📝 Saved pending request for @${rowKey} to access ${repository}`);
+
     // Call GitHub
-    const status = await inviteCollaborator(rowKey, permission);
+    const status = await inviteCollaborator(
+      rowKey,
+      permission,
+      repository,
+      ctx
+    );
 
     // Determine final state
-    const invites = await listInvitations();
+    const invites = await listInvitations(repository);
     const pending = invites.find(
       (i: any) => i.invitee?.login?.toLowerCase() === rowKey.toLowerCase()
     );

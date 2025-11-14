@@ -19,6 +19,27 @@ project.lock.json
 /secrets
 /data
 .secrets
+
+# Node.js dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Azure Functions local settings (contains secrets)
+local.settings.json
+
+# TypeScript build output
+dist/
+*.js.map
+
+# Environment variables
+.env
+.env.local
+
+# OS generated files
+.DS_Store
+Thumbs.db
 appsettings.json
 local.settings.json
 
